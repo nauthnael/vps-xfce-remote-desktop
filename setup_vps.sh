@@ -48,8 +48,9 @@ echo "=== Cài đặt các gói tiện ích ==="
 apt install -y wget curl gnupg2 software-properties-common apt-transport-https ca-certificates btop
 
 # Bước 4: Cài đặt XFCE và Chrome Remote Desktop
-echo "=== Cài đặt XFCE ==="
-apt install -y xfce4 xfce4-goodies dbus-x11 x11-xserver-utils desktop-base xscreensaver xvfb
+echo "=== Cài đặt XFCE và các thư viện cần thiết cho CRD ==="
+apt install -y xfce4 xfce4-goodies dbus-x11 x11-xserver-utils desktop-base xscreensaver xvfb \
+    xserver-xorg-video-dummy xbase-clients python3-psutil python3-xdg
 
 echo "=== Cài đặt Chrome Remote Desktop ==="
 wget -O /tmp/crd.deb https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
@@ -59,7 +60,6 @@ rm /tmp/crd.deb
 # Cấu hình Chrome Remote Desktop sử dụng XFCE cho user ubuntu
 echo "Cấu hình XFCE làm môi trường Desktop mặc định cho CRD..."
 su - ubuntu -c "bash -c 'echo \"exec /etc/X11/Xsession /usr/bin/xfce4-session\" > ~/.chrome-remote-desktop-session'"
-su - ubuntu -c "systemctl --user enable chrome-remote-desktop" || true
 
 # Bước 5: Cài đặt ARO linux app (Có lựa chọn)
 if [ "$AUTO_INSTALL_ARO" == "aro" ]; then
@@ -77,6 +77,17 @@ if [[ "$INSTALL_ARO_CHOICE" =~ ^[Yy]$ ]]; then
     rm /tmp/aro_app.deb
 else
     echo "Bỏ qua cài đặt ARO Linux App."
+fi
+
+# Bước 6: Dọn dẹp hệ thống
+echo ""
+read -p "Bạn có muốn dọn dẹp các gói (packages) thừa không (Gợi ý: nên dọn dẹp)? (y/n): " -r CLEANUP_CHOICE
+if [[ "$CLEANUP_CHOICE" =~ ^[Yy]$ ]]; then
+    echo "=== Đang dọn dẹp hệ thống ==="
+    apt autoremove -y
+    apt clean
+else
+    echo "Bỏ qua dọn dẹp."
 fi
 
 echo "=== Cài đặt hoàn tất! ==="
