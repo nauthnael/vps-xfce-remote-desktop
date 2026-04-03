@@ -5,8 +5,9 @@ set -e
 
 echo "=== Bắt đầu cài đặt ==="
 
-# Nhận tham số mật khẩu (nếu có)
+# Nhận tham số (nếu có)
 UBUNTU_PASSWORD=$1
+AUTO_INSTALL_ARO=${2,,} # Chuyển param thứ 2 thành chữ thường (ví dụ: aro)
 
 # Bước 0: Kiểm tra và tạo user 'ubuntu'
 if id "ubuntu" &>/dev/null; then
@@ -46,14 +47,6 @@ apt upgrade -y
 echo "=== Cài đặt các gói tiện ích ==="
 apt install -y wget curl gnupg2 software-properties-common apt-transport-https ca-certificates btop
 
-# Bước 3: Tải và cài đặt ARO linux app
-echo "=== Cài đặt ARO Linux App ==="
-ARO_DOWNLOAD_URL="https://download.aro.network/files/packages/linux/ARO_Desktop_latest_debian.deb" 
-wget -O /tmp/aro_app.deb "$ARO_DOWNLOAD_URL"
-dpkg -i /tmp/aro_app.deb || apt --fix-broken install -y
-# Xoá file rác
-rm /tmp/aro_app.deb
-
 # Bước 4: Cài đặt XFCE và Chrome Remote Desktop
 echo "=== Cài đặt XFCE ==="
 apt install -y xfce4 xfce4-goodies dbus-x11 x11-xserver-utils desktop-base xscreensaver xvfb
@@ -67,6 +60,24 @@ rm /tmp/crd.deb
 echo "Cấu hình XFCE làm môi trường Desktop mặc định cho CRD..."
 su - ubuntu -c "bash -c 'echo \"exec /etc/X11/Xsession /usr/bin/xfce4-session\" > ~/.chrome-remote-desktop-session'"
 su - ubuntu -c "systemctl --user enable chrome-remote-desktop" || true
+
+# Bước 5: Cài đặt ARO linux app (Có lựa chọn)
+if [ "$AUTO_INSTALL_ARO" == "aro" ]; then
+    INSTALL_ARO_CHOICE="y"
+else
+    echo ""
+    read -p "Bạn có muốn cài đặt ARO Linux App không? (y/n): " -r INSTALL_ARO_CHOICE
+fi
+
+if [[ "$INSTALL_ARO_CHOICE" =~ ^[Yy]$ ]]; then
+    echo "=== Cài đặt ARO Linux App ==="
+    ARO_DOWNLOAD_URL="https://download.aro.network/files/packages/linux/ARO_Desktop_latest_debian.deb" 
+    wget -O /tmp/aro_app.deb "$ARO_DOWNLOAD_URL"
+    dpkg -i /tmp/aro_app.deb || apt --fix-broken install -y
+    rm /tmp/aro_app.deb
+else
+    echo "Bỏ qua cài đặt ARO Linux App."
+fi
 
 echo "=== Cài đặt hoàn tất! ==="
 echo ""
