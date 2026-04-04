@@ -49,7 +49,7 @@ apt install -y wget curl gnupg2 software-properties-common apt-transport-https c
 
 # Bước 4: Cài đặt XFCE và Chrome Remote Desktop
 echo "=== Cài đặt XFCE và các thư viện cần thiết cho CRD ==="
-apt install -y xfce4 xfce4-goodies dbus-x11 x11-xserver-utils desktop-base xscreensaver xvfb \
+apt install -y xfce4 xfce4-goodies dbus-x11 x11-xserver-utils desktop-base xvfb \
     xserver-xorg-video-dummy xbase-clients python3-psutil python3-xdg
 
 echo "=== Cài đặt Chrome Remote Desktop ==="
