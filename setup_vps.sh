@@ -4,7 +4,26 @@
 set -e
 
 # Tự động dọn dẹp file cài đặt tạm trong /tmp khi thoát script
-trap 'rm -f /tmp/*.deb' EXIT
+trap 'rm -f /tmp/*.deb /tmp/google-chrome-key.gpg' EXIT
+
+# Rollback SSH config nếu script gặp lỗi sau bước SSH Hardening
+SSH_HARDENING_DONE=false
+trap 'on_error' ERR
+
+on_error() {
+    local exit_code=$?
+    echo ""
+    echo "⚠️ Script gặp lỗi (exit code: $exit_code)!"
+    
+    # Chỉ rollback nếu đã chạy qua SSH Hardening
+    if [ "$SSH_HARDENING_DONE" = "true" ] && [ -f /etc/ssh/sshd_config.d/99-hardening.conf ]; then
+        echo "Đang rollback SSH config để tránh lock out..."
+        sed -i 's/^PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config.d/99-hardening.conf 2>/dev/null
+        systemctl restart ssh 2>/dev/null && echo "✅ Đã rollback: Root login vẫn khả dụng." || true
+    fi
+    
+    exit $exit_code
+}
 
 echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')] === Bắt đầu cài đặt ==="
 
@@ -99,6 +118,7 @@ if [ "$SWAP_TOTAL" -gt 0 ]; then
 else
     # Tính dung lượng disk (GB) của phân vùng root
     DISK_TOTAL_GB=$(df -BG / | awk 'NR==2 {gsub("G",""); print $2}')
+    DISK_TOTAL_GB=${DISK_TOTAL_GB:-20}  # Guard: mặc định 20GB nếu không đọc được (overlay/tmpfs)
 
     # Xác định kích thước swap theo dung lượng disk
     if [ "$DISK_TOTAL_GB" -lt 16 ]; then
@@ -183,6 +203,7 @@ EOF
 if sshd -t 2>/dev/null; then
     systemctl restart ssh
     echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')] ✅ SSH hardening hoàn tất. PermitRootLogin=${PERMIT_ROOT_LOGIN}"
+    SSH_HARDENING_DONE=true
 else
     echo "⚠️ SSH config có lỗi, KHÔNG restart để tránh mất kết nối."
     echo "Kiểm tra lại: /etc/ssh/sshd_config.d/99-hardening.conf"
@@ -261,6 +282,19 @@ EOF
 echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')] ✅ Đã cấu hình Xwrapper cho môi trường headless."
 
 
+# Kiểm tra kết nối internet trước khi download
+echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')] Kiểm tra kết nối internet..."
+if ! ping -c 1 -W 3 8.8.8.8 &>/dev/null && ! ping -c 1 -W 3 1.1.1.1 &>/dev/null; then
+    echo "⚠️ CẢNH BÁO: Không có kết nối internet. Script sẽ tiếp tục nhưng có thể fail ở bước download."
+    read -p "Bạn có muốn tiếp tục? (y/n): " -r CONTINUE_CHOICE || true
+    if [[ ! "$CONTINUE_CHOICE" =~ ^[Yy]$ ]]; then
+        echo "Script dừng theo yêu cầu của người dùng."
+        exit 0
+    fi
+else
+    echo "✅ Kết nối internet hoạt động bình thường."
+fi
+
 # Bước 8: Cài đặt Chrome Remote Desktop
 echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')] === Cài đặt Chrome Remote Desktop ==="
 
@@ -281,8 +315,42 @@ fi
 # Pre-tạo system user thủ công (với force-badname) trước khi post-install script của CRD gọi tới lệnh adduser
 adduser --system --quiet --group --force-badname _crd_network || true
 
-wget -O /tmp/crd.deb https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
-apt install -y /tmp/crd.deb
+# Thử cài CRD từ file .deb trước (nhanh hơn)
+CRD_DEB_URL="https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb"
+echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')] Thử tải CRD từ file .deb..."
+
+if wget -q --spider "$CRD_DEB_URL" 2>/dev/null && wget -O /tmp/crd.deb "$CRD_DEB_URL" 2>/dev/null; then
+    echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')] ✅ Tải .deb thành công, đang cài đặt..."
+    if apt install -y /tmp/crd.deb 2>/dev/null; then
+        echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')] ✅ CRD đã được cài từ file .deb"
+        CRD_INSTALL_SUCCESS=true
+    else
+        echo "⚠️ Cài .deb thất bại, sẽ thử cài từ repo..."
+        CRD_INSTALL_SUCCESS=false
+    fi
+else
+    echo "⚠️ Không thể tải file .deb (404 hoặc lỗi mạng), sẽ thử cài từ repo..."
+    CRD_INSTALL_SUCCESS=false
+fi
+
+# Fallback: Cài từ Google Chrome repository nếu .deb fail
+if [ "$CRD_INSTALL_SUCCESS" != "true" ]; then
+    echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')] Cài CRD từ Google Chrome repository..."
+    
+    # Thêm Google Chrome repo chính thức
+    wget -q -O /tmp/google-chrome-key.gpg https://dl.google.com/linux/linux_signing_key.pub
+    gpg --dearmor -o /usr/share/keyrings/google-chrome-archive-keyring.gpg /tmp/google-chrome-key.gpg
+    rm -f /tmp/google-chrome-key.gpg
+    
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-archive-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+    
+    # Update apt cache để nhận repo mới
+    apt update -y
+    
+    # Cài Chrome Remote Desktop từ repo
+    apt install -y chrome-remote-desktop
+    echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')] ✅ CRD đã được cài từ Google repository"
+fi
 
 # Cấu hình Chrome Remote Desktop sử dụng XFCE cho user ubuntu
 # Sử dụng phương pháp chown direct thay vì `su -` để tránh lỗi session PAM trên VPS rút gọn
@@ -431,6 +499,13 @@ else
     echo "⚠️  Sudo: NOPASSWD chưa được cấu hình - user ubuntu có thể không dùng được sudo"
 fi
 
+# Kiểm tra Xwrapper.config
+if [ -f /etc/X11/Xwrapper.config ]; then
+    echo "✅ Xwrapper: Đã được cấu hình cho môi trường headless"
+else
+    echo "⚠️  Xwrapper: Chưa được cấu hình - CRD có thể không khởi động Xorg"
+fi
+
 # Liệt kê port đang listen
 echo ""
 echo "=== Các port đang mở ==="
@@ -438,6 +513,17 @@ ss -tlnp | grep LISTEN
 
 
 echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')] === Cài đặt hoàn tất! ==="
+echo ""
+echo "=== 📋 Tóm tắt cấu hình ==="
+echo "Swap: ${SWAP_SIZE:-Đã có sẵn ${SWAP_TOTAL}MB}"
+echo "SSH: Password auth OFF, Root login ${PERMIT_ROOT_LOGIN^^}"
+echo "Firewall: UFW enabled (ports 22, 11235 allowed)"
+echo "Desktop: XFCE + CRD, Power saving disabled"
+if [[ "$INSTALL_ARO_CHOICE" =~ ^[Yy]$ ]]; then
+    echo "ARO: Installed"
+else
+    echo "ARO: Skipped"
+fi
 echo ""
 echo "=== Hướng dẫn kích hoạt Chrome Remote Desktop ==="
 echo ""
